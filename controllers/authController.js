@@ -1,13 +1,13 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
+const cloudinary = require('../config/cloudinary');
 
-// Register new user
+// Register with profile picture
 const register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, profilePicture } = req.body;
     
-    // Validate input
     if (!name || !email || !password) {
       return res.status(400).json({ 
         success: false,
@@ -15,7 +15,6 @@ const register = async (req, res) => {
       });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ 
@@ -24,7 +23,6 @@ const register = async (req, res) => {
       });
     }
 
-    // Check password length
     if (password.length < 6) {
       return res.status(400).json({ 
         success: false,
@@ -36,10 +34,29 @@ const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Insert user into database
-    const query = 'INSERT INTO users (name, email, password) VALUES (?, ?, ?)';
+    // Upload image to Cloudinary if provided
+    let profilePictureUrl = null;
+    if (profilePicture) {
+      try {
+        const uploadResult = await cloudinary.uploader.upload(profilePicture, {
+          folder: 'auth_app_profiles',
+          resource_type: 'image',
+          transformation: [
+            { width: 500, height: 500, crop: 'limit' },
+            { quality: 'auto' },
+            { fetch_format: 'auto' }
+          ]
+        });
+        profilePictureUrl = uploadResult.secure_url;
+      } catch (uploadError) {
+        console.error('Cloudinary upload error:', uploadError);
+        // Continue with registration even if image upload fails
+      }
+    }
+
+    const query = 'INSERT INTO users (name, email, password, profile_picture) VALUES (?, ?, ?, ?)';
     
-    db.query(query, [name, email, hashedPassword], (err, result) => {
+    db.query(query, [name, email, hashedPassword, profilePictureUrl], (err, result) => {
       if (err) {
         if (err.code === 'ER_DUP_ENTRY') {
           return res.status(409).json({ 
@@ -56,7 +73,8 @@ const register = async (req, res) => {
       res.status(201).json({ 
         success: true,
         message: 'User registered successfully',
-        userId: result.insertId
+        userId: result.insertId,
+        profilePicture: profilePictureUrl
       });
     });
   } catch (error) {
@@ -67,12 +85,11 @@ const register = async (req, res) => {
   }
 };
 
-// Login user
+// Login (updated to return profile picture)
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Validate input
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
@@ -80,7 +97,6 @@ const login = async (req, res) => {
       });
     }
 
-    // Find user by email
     const query = 'SELECT * FROM users WHERE email = ?';
     
     db.query(query, [email], async (err, results) => {
@@ -99,8 +115,6 @@ const login = async (req, res) => {
       }
 
       const user = results[0];
-
-      // Compare passwords
       const passwordMatch = await bcrypt.compare(password, user.password);
 
       if (!passwordMatch) {
@@ -110,7 +124,6 @@ const login = async (req, res) => {
         });
       }
 
-      // Generate JWT token
       const token = jwt.sign(
         { userId: user.id, email: user.email }, 
         process.env.JWT_SECRET, 
@@ -124,7 +137,8 @@ const login = async (req, res) => {
         user: { 
           id: user.id, 
           name: user.name, 
-          email: user.email 
+          email: user.email,
+          profilePicture: user.profile_picture
         }
       });
     });
@@ -136,10 +150,10 @@ const login = async (req, res) => {
   }
 };
 
-// Get user profile
+// Get profile (updated to return profile picture)
 const getProfile = (req, res) => {
   try {
-    const query = 'SELECT id, name, email, created_at FROM users WHERE id = ?';
+    const query = 'SELECT id, name, email, profile_picture, created_at FROM users WHERE id = ?';
     
     db.query(query, [req.userId], (err, results) => {
       if (err) {
